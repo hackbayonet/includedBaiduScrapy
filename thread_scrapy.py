@@ -1,20 +1,44 @@
-import sys, getopt, os, requests, random, userAgent, time, re, queue
+import sys, getopt, os, requests, random, userAgent, time, re, queue, logging
 from threading import Thread
 from lxml import etree
 import csv
 
+logging.basicConfig(level=logging.DEBUG,
+                    format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
+                    datefmt='%a, %d %b %Y %H:%M:%S',
+                    filename='myapp.log',
+                    filemode='w')
+
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s %(filename)s %(levelname)s %(message)s')
+console.setFormatter(formatter)
+logging.getLogger('').addHandler(console)
+
 
 def save(_file, keyword, url, i):
-    '''
+    """
     将结果进行保存
     :param _file: 已经打开的文件
     :param keyword: 关键词
     :param url: url
     :param i: 位置
-    '''
+    """
     # csv_file = _file.write(codecs.BOM_UTF8)
     spamwriter = csv.writer(_file, dialect='excel')
     spamwriter.writerow([keyword, url, i])
+
+
+class Timing(Thread):
+    def __init__(self, tasks):
+        Thread.__init__(self)
+        self.tasks = tasks
+        self.start()
+
+    def run(self):
+        while True:
+            logging.info('待爬去数为 {} 条'.format(self.tasks.qsize()))
+            time.sleep(5)
 
 
 class Scrapy(Thread):
@@ -31,27 +55,35 @@ class Scrapy(Thread):
             agent = random.choice(userAgent.agents)
             new_url = 'https://www.baidu.com/s?wd=' + task
             try:
-                response = requests.get(url=new_url, headers={'User-Agent': agent})
+                response = requests.get(url=new_url, headers={'User-Agent': agent}, timeout=20)
             except requests.exceptions.SSLError as sslError:
                 # TODO SSLERROR 错误暂不进行任何处理
-                print('INFO[ERROR]: SSL Error url->{}'.format(new_url))
+                logging.error('SSL Error url->{}'.format(new_url))
                 time.sleep(1)  # TODO 冻住不许走
-                return
+                continue
+
+            except requests.exceptions.Timeout as timeoutError:
+                # TODO Timeout 错误暂不进行任何处理
+                logging.error('Timeout Error url->{}'.format(new_url))
+                time.sleep(1)  # TODO 冻住不许走
+                continue
 
             # TODO 百度验证码 暂时未遇见过  先这样处理了
             if re.search('验证码', response.text):
-                print('error: 验证码->{}.html'.format(new_url))
-                with open('{}.html'.format(new_url), 'w') as _file:
-                    _file.write(response.content)
-                return
+                logging.error('写入原始文件中->{}.html'.format(new_url))
+                with open('{}.html'.format(new_url), 'w') as html_file:
+                    html_file.write(response.content)
+                continue
 
             if response.status_code == 200:
                 self.parser(response, task)
+            else:
+                logging.warning('状态码不正确 status_code->{}'.format(response.status_code))
 
     # 分析百度查询页面
     def parser(self, response, keyword):
         if not response:
-            print('INFO[ERROR]: Error keyword->{}'.format(keyword))
+            logging.error('Error keyword->{}'.format(keyword))
             return set()
         html = etree.HTML(response.content)
 
@@ -68,18 +100,19 @@ class Scrapy(Thread):
 
                 url = url.split('/')[0]
                 url = url.replace('...', '')
-                print(url)
+
                 if re.search('com\.cn', url):
                     url = '.'.join(url.split('.')[-3:])
                 else:
                     url = '.'.join(url.split('.')[-2:])
             except IndexError as e:
                 url = None
-            print('INFO[DEBUG]: keyword->{} url->{}'.format(keyword, url))
+
+            # print('INFO[DEBUG]: keyword->{} url->{}'.format(keyword, url))
             if url in self.urls:
                 self.putout_file.flush()
                 save(self.putout_file, keyword, url, i)
-                print('INFO[DEBUG]: 关键词: {}, 多少位->{}'.format(keyword, i))
+                logging.info('关键词: {}, 多少位->{}'.format(keyword, i))
 
 
 class ThreadPool:
@@ -87,6 +120,7 @@ class ThreadPool:
         self.tasks = queue.Queue()
         for _ in range(num_threads):
             Scrapy(self.tasks, urls=urls, putout_file=putout_file)
+        Timing(self.tasks)
 
     def wait_completion(self):
         self.tasks.join()
@@ -128,11 +162,11 @@ if __name__ == '__main__':
         if name in ['-o', '--putout']:
             putout_fileName = value
 
-    print('info[debug]: {}->{}, {}->{}, {}->{}'.format('url', url_fileName, 'keyword', keyword_fileName, 'putout',
+        logging.info('{}->{}, {}->{}, {}->{}'.format('url', url_fileName, 'keyword', keyword_fileName, 'putout',
                                                        putout_fileName))
 
     if not os.access(url_fileName, os.F_OK) or not os.access(url_fileName, os.F_OK):
-        print('INFO[ERROR]: url.txt 或 keyword.txt 文件不存在')
+        logging.error('url.txt 或 keyword.txt 文件不存在')
         exit(-1)
 
     url_file = open(url_fileName, 'r', encoding='utf8')
@@ -144,7 +178,7 @@ if __name__ == '__main__':
         tasks = list(set(tasks))
         urls = list(set([url.replace('\n', '').replace('\r', '') for url in url_file.readlines()]))
 
-        print('INFO: 需查询的关键词共 {} 个, 域名共 {} 个'.format(len(tasks), len(urls)))
+        logging.info('需查询的关键词共 {} 个, 域名共 {} 个'.format(len(tasks), len(urls)))
         pool = ThreadPool(4, urls, putout_file)
 
         for task in tasks:
