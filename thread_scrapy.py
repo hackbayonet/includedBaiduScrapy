@@ -3,6 +3,8 @@ from threading import Thread
 from lxml import etree
 import csv
 
+status = True
+
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
                     datefmt='%a, %d %b %Y %H:%M:%S',
@@ -36,9 +38,14 @@ class Timing(Thread):
         self.start()
 
     def run(self):
-        while True:
+        global status
+        time.sleep(0.3)
+        while status:
             logging.info('待爬去数为 {} 条'.format(self.tasks.qsize()))
             time.sleep(5)
+            if self.tasks.qsize() == 0:
+                logging.info('任务处理完毕 程序即将结束 请等候!')
+                status = False
 
 
 class Scrapy(Thread):
@@ -50,8 +57,18 @@ class Scrapy(Thread):
         self.start()
 
     def run(self):
-        while True:
-            task = self.tasks.get()
+        time.sleep(0.3)
+        while status:
+            try:
+                task = self.tasks.get(timeout=3)
+            except queue.Empty as empty:
+                continue
+            finally:
+                try:
+                    self.tasks.task_done()
+                except ValueError as taskError:
+                    pass
+
             agent = random.choice(userAgent.agents)
             new_url = 'https://www.baidu.com/s?wd=' + task
             try:
@@ -163,7 +180,7 @@ if __name__ == '__main__':
             putout_fileName = value
 
         logging.info('{}->{}, {}->{}, {}->{}'.format('url', url_fileName, 'keyword', keyword_fileName, 'putout',
-                                                       putout_fileName))
+                                                     putout_fileName))
 
     if not os.access(url_fileName, os.F_OK) or not os.access(url_fileName, os.F_OK):
         logging.error('url.txt 或 keyword.txt 文件不存在')
