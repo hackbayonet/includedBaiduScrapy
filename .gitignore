@@ -48,3 +48,6 @@ docs/_build/
 target/
 #idea
 .idea/
+.project
+.pydevproject
+output.csv

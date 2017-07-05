@@ -1,3 +1,4 @@
+# -*- encoding: utf8 -*-
 import sys, getopt, os, requests, random, userAgent, time, re, queue, logging
 from threading import Thread
 from lxml import etree
@@ -16,6 +17,23 @@ console.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s %(filename)s %(levelname)s %(message)s')
 console.setFormatter(formatter)
 logging.getLogger('').addHandler(console)
+
+
+def filter(url):
+    """
+    对URL进行过滤 返回 顶级域名
+    """
+    url = url.replace('http://', '').replace('https://', '')
+    url = url.replace('\r', '').replace('\n', '')
+    url = url.split('/')[0]
+    url = url.replace('...', '')
+
+    if re.search('com\.cn', url):
+        url = '.'.join(url.split('.')[-3:])
+    else:
+        url = '.'.join(url.split('.')[-2:])
+
+    return url
 
 
 def save(_file, keyword, url, i):
@@ -85,11 +103,12 @@ class Scrapy(Thread):
                 time.sleep(1)  # TODO 冻住不许走
                 continue
 
-            # TODO 百度验证码 暂时未遇见过  先这样处理了
+            # TODO 百度验证码 暂时未遇见过  先这样处理了 希望能这样捕获到
             if re.search('验证码', response.text):
                 logging.error('写入原始文件中->{}.html'.format(new_url))
                 with open('{}.html'.format(new_url), 'w') as html_file:
                     html_file.write(response.content)
+                time.sleep(1)  # TODO 冻住不许走
                 continue
 
             if response.status_code == 200:
@@ -104,26 +123,16 @@ class Scrapy(Thread):
             return set()
         html = etree.HTML(response.content)
 
-        i = 0
-        for div in html.xpath('//div[@id="content_left"]/div'):
+        for i, div in enumerate(html.xpath('//div[@id="content_left"]/div')):
             # 过滤广告
             if div.xpath('div/font/a/span|a/span'):
                 continue
-            i += 1
             try:
                 url = div.xpath('div[2]/a[1]/text()|div/div[2]/div[2]/a[1]/text()|/div[3]/a[1]/text()')[0]
-                url = url.replace('http://', '')
-                url = url.replace('https://', '')
-
-                url = url.split('/')[0]
-                url = url.replace('...', '')
-
-                if re.search('com\.cn', url):
-                    url = '.'.join(url.split('.')[-3:])
-                else:
-                    url = '.'.join(url.split('.')[-2:])
+                url = filter(url)
             except IndexError as e:
-                url = None
+                # url 为空 暂将不进行任何处理
+                return
 
             # print('INFO[DEBUG]: keyword->{} url->{}'.format(keyword, url))
             if url in self.urls:
@@ -136,7 +145,9 @@ class ThreadPool:
     def __init__(self, num_threads, urls, putout_file):
         self.tasks = queue.Queue()
         for _ in range(num_threads):
+            # 启动任务线程
             Scrapy(self.tasks, urls=urls, putout_file=putout_file)
+        # 启动定时器 定时输出 任务进度
         Timing(self.tasks)
 
     def wait_completion(self):
@@ -145,6 +156,28 @@ class ThreadPool:
     def loop_task(self, keyword):
         # print(keyword)
         self.tasks.put(keyword)
+
+
+def urlFileFilter(file_name):
+    """
+    处理URL文件 将URL 提取为 顶级域名
+    :param file_name:
+    :return:
+    """
+    with open(file_name, 'r', encoding='utf8') as _file:
+        # 过滤重复数据
+        urls = set(list(_file.readlines()))
+    new_urls = []
+    for url in urls:
+        try:
+            url = filter(url)
+        except IndexError as e:
+            logging.error('获取顶级域名失败! url -> {url}'.format(url=url))
+            continue
+        else:
+            # print(url)
+            new_urls.append(url)
+    return new_urls
 
 
 def usage():
@@ -179,27 +212,29 @@ if __name__ == '__main__':
         if name in ['-o', '--putout']:
             putout_fileName = value
 
-        logging.info('{}->{}, {}->{}, {}->{}'.format('url', url_fileName, 'keyword', keyword_fileName, 'putout',
-                                                     putout_fileName))
+    logging.info('{}->{}, {}->{}, {}->{}'.format('url', url_fileName, 'keyword', keyword_fileName, 'putout',
+                                                 putout_fileName))
 
     if not os.access(url_fileName, os.F_OK) or not os.access(url_fileName, os.F_OK):
         logging.error('url.txt 或 keyword.txt 文件不存在')
         exit(-1)
 
-    url_file = open(url_fileName, 'r', encoding='utf8')
+    urls = urlFileFilter(url_fileName)
+
+    # 打开相关资源文件
     putout_file = open(putout_fileName, 'w', encoding='utf8')
 
     with open(keyword_fileName, 'r', encoding='utf8') as _file:
         tasks = _file.readlines()
         # 去重
         tasks = list(set(tasks))
-        urls = list(set([url.replace('\n', '').replace('\r', '') for url in url_file.readlines()]))
 
         logging.info('需查询的关键词共 {} 个, 域名共 {} 个'.format(len(tasks), len(urls)))
         pool = ThreadPool(4, urls, putout_file)
+        [pool.loop_task(task.replace('\r', '').replace('\n', '')) for task in tasks]
 
-        for task in tasks:
-            task = task.replace('\r', '')
-            task = task.replace('\n', '')
-            pool.loop_task(task)
-        pool.wait_completion()
+    # 等待任务队列执行完毕
+    pool.wait_completion()
+
+    # 关闭关资源文件
+    putout_file.close()
