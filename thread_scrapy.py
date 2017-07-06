@@ -104,11 +104,15 @@ class Scrapy(Thread):
                 continue
 
             # TODO 百度验证码 暂时未遇见过  先这样处理了 希望能这样捕获到
+            # TODO 好蠢 居然把 完整URL给放进去了  能不报错么.
             if re.search('验证码', response.text):
-                logging.error('写入原始文件中->{}.html'.format(new_url))
-                with open('{}.html'.format(new_url), 'w') as html_file:
-                    html_file.write(response.content)
-                time.sleep(1)  # TODO 冻住不许走
+                logging.error('写入原始文件中->{}.html'.format(task))
+                try:
+                    with open('{}.html'.format(task), 'w') as html_file:
+                        html_file.write(response.content)
+                    time.sleep(1)  # TODO 冻住不许走
+                except:
+                    logging.error('写入原始文件失败! mmp....')
                 continue
 
             if response.status_code == 200:
@@ -123,7 +127,10 @@ class Scrapy(Thread):
             return set()
         html = etree.HTML(response.content)
 
-        for i, div in enumerate(html.xpath('//div[@id="content_left"]/div')):
+        # 不知道为什么用这个查询 出来的位置不正确
+        # for i, div in enumerate(html.xpath('//div[@id="content_left"]/div'), start=1):
+        i = 0
+        for div in html.xpath('//div[@id="content_left"]/div'):
             # 过滤广告
             if div.xpath('div/font/a/span|a/span'):
                 continue
@@ -133,7 +140,7 @@ class Scrapy(Thread):
             except IndexError as e:
                 # url 为空 暂将不进行任何处理
                 return
-
+            i += 1
             # print('INFO[DEBUG]: keyword->{} url->{}'.format(keyword, url))
             if url in self.urls:
                 self.putout_file.flush()
